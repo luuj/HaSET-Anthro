@@ -1,13 +1,24 @@
+---
+title: "Anthro analysis"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, comment=NA)
 library(lme4)
 library(tidyverse)
 library(magrittr)
 library(gridExtra)
+library(binom) # For AC binomial confidence intervals
+```
+
+```{r, echo=F, include=F, cache=T}
 load("~/Library/CloudStorage/OneDrive-HarvardUniversity/School/Harvard/HaSET/Code/anthro_data.RData")
 
 ##### Exploratory analysis and data wrangling #####
 dat <- anthro %>% subset(age >= 0 & age < 1000 & !is.na(length)) # Remove invalid age and missing lengths - 13418 observations
 
-# Categorizing age
+# Categorizing age 
 dat %<>% mutate(visit = case_when(age <= 3 ~ "Birth", 
                                   age > 3 & age < 10 ~ "Day 6",
                                   age > 20 & age < 35 ~ "Day 28",
@@ -35,7 +46,7 @@ isStunted <- Vectorize(function(age_in, length_in){
 })
 dat %<>% mutate(stunt=isStunted(age,length))
 
-# Remove facility visits after birth
+# Remove facility visits after birth - 13418 to 11086 observations
 dat %<>% filter(location=="community" | visit=="Birth")
 
 # Append splines to dataset
@@ -192,20 +203,20 @@ allIR.2sd <- rbind(inc_and_rev_Calc(removesd(mod6,dat),"Mod6"),
                    inc_and_rev_Calc(dat,"Observed"))
 
 IR_n <- nrow(allIR.2sd)/2
-allIR.2sd[rep(c(T,F),IR_n),1:5] # Get incidence
-allIR.2sd[rep(c(F,T),IR_n),1:5] # Get incidence counts
-allIR.2sd[rep(c(T,F),IR_n),6:10] # Get reversal
-allIR.2sd[rep(c(F,T),IR_n),6:10] # Get reversal counts
+inc <- allIR.2sd[rep(c(T,F),IR_n),1:5] # Get incidence
+inc_c <- allIR.2sd[rep(c(F,T),IR_n),1:5] # Get incidence counts
+rev <- allIR.2sd[rep(c(T,F),IR_n),6:10] # Get reversal
+rev_c <- allIR.2sd[rep(c(F,T),IR_n),6:10] # Get reversal counts
 
 # Incidence and reversal tables w/ common baseline of Day 6
 allIR.2sd.baseline <- rbind(inc_and_rev_Calc(removesd(mod6,dat),"Mod6", "Day 6"),
                    inc_and_rev_Calc(dat,"Observed", "Day 6"))
 
-IR_n <- nrow(allIR.2sd.baseline)/2
-allIR.2sd.baseline[rep(c(T,F),IR_n),1:5] # Get incidence w/ common baseline
-allIR.2sd.baseline[rep(c(F,T),IR_n),1:5] # Get incidence counts w/ common baseline
-allIR.2sd.baseline[rep(c(T,F),IR_n),6:10] # Get reversal w/ common baseline
-allIR.2sd.baseline[rep(c(F,T),IR_n),6:10] # Get reversal counts w/ common baseline
+IR_n.cb <- nrow(allIR.2sd.baseline)/2
+inc.cb <- allIR.2sd.baseline[rep(c(T,F),IR_n.cb),1:5] # Get incidence w/ common baseline
+inc_c.cb <- allIR.2sd.baseline[rep(c(F,T),IR_n.cb),1:5] # Get incidence counts w/ common baseline
+rev.cb <- allIR.2sd.baseline[rep(c(T,F),IR_n.cb),6:10] # Get reversal w/ common baseline
+rev_c.cb <- allIR.2sd.baseline[rep(c(F,T),IR_n.cb),6:10] # Get reversal counts w/ common baseline
 
 
 
@@ -218,11 +229,49 @@ sapply(c(mod1,mod2,mod3,mod4,mod5,mod6),deviance)
 
 
 
+##### Proportion CI #####
+# Returns Agresti-coull CI, given data frame with # of successes and # of trials
+getCI <- function(data.in){
+  colnames(data.in) <- c("Success","N")
+  result <- round(binom.confint(data.in[,"Success"],data.in[,"N"],methods="agresti-coull")[4:6],3)*100
+}
+
+# Returns formatted dataset for plotting
+createPlotCI <- function(n, N, categories){
+  model <- cbind(type="Model",Age=categories, getCI(cbind(t(n[1,]), t(N[1,]))))
+  obs <- cbind(type="Observed",Age=categories, getCI(cbind(t(n[2,]), t(N[2,]))))
+  out <- rbind(model, obs)
+  
+  labels <-  c("Model", "Age", "Estimate", "Lower", "Upper")
+  colnames(out) <- labels
+  return(out)
+}
+
+# Confidence intervals for prevalence
+categories <- factor(c("Birth","Day 6","Day 28","Day 42","6 months","12 months","24 months"), 
+                     levels = c("Birth","Day 6","Day 28","Day 42","6 months","12 months","24 months"))
+prev_dat <- createPlotCI(allPrev.2sd[,-1]*removedPoints[,-8], removedPoints[,-8], categories)
+
+# Confidence intervals for sequential incidence 
+inc_dat <- createPlotCI(inc[,3:5]*inc_c[,3:5], inc_c[,3:5], categories[5:7])
+
+# Confidence intervals for common-baseline incidence 
+inc_dat.cb <- createPlotCI(inc.cb[,3:5]*inc_c.cb[,3:5], inc_c.cb[,3:5], categories[5:7])
+
+# Confidence intervals for sequential reversal 
+rev_dat <- createPlotCI(rev[,3:5]*rev_c[,3:5], rev_c[,3:5], categories[5:7])
+
+# Confidence intervals for common-baseline reversal 
+rev_dat.cb <- createPlotCI(rev.cb[,3:5]*rev_c.cb[,3:5], rev_c.cb[,3:5], categories[5:7])
+
+
+
+
 ##### Plotting #####
 # Scatter plot of age*length with age windows
 al_scatter <- dat %>% mutate(age=age*30.437) %>% ggplot(aes(x=age, y=length)) + geom_point(shape=1, color="orange") +
   scale_x_continuous(name="Age (days)", breaks=c(0, 28, 180, 365, 730))
-al_scatter +  theme(legend.position = "none") + ylab("Length") + geom_vline(xintercept = 165, linetype="dotted", color="Blue") +
+window_plot <- al_scatter +  theme(legend.position = "none") + ylab("Length") + geom_vline(xintercept = 165, linetype="dotted", color="Blue") +
   geom_vline(xintercept = 200, linetype="dotted", color="Blue") + geom_vline(xintercept = 350, linetype="dotted", color="Red") +
   geom_vline(xintercept = 380, linetype="dotted", color="Red") + geom_vline(xintercept = 715, linetype="dotted", color="green") +
   geom_vline(xintercept = 745, linetype="dotted", color="green") + geom_vline(xintercept = 40, linetype="dotted", color="yellow") +
@@ -242,11 +291,176 @@ plotOP <- function(dat_in, modelText){
 # Plot observed vs predicted length for model 6
 # Create dataset with both observed and predicted values
 pred.v.obs <- dat %>% select(age,age_s,length,visit,cuuid,n_obs) %>% mutate(p_length6=predict(mod6))
-pred.v.obs %>% pivot_longer(c("length", "p_length6")) %>% plotOP("Model 6")
+predicted_plot <- pred.v.obs %>% pivot_longer(c("length", "p_length6")) %>% plotOP("Model 6")
 
 # Plot removed points for model 6
 removed_pts <- anti_join(dat, removesd(mod6,dat)) %>% mutate(removed=T) %>% select(age,length,removed)
 plot_pts <- removesd(mod6,dat) %>% mutate(removed=F) %>% select(age,length,removed) %>% rbind(removed_pts)
-ggplot(data=plot_pts, aes(x=age,y=length, color=removed)) + geom_point() + 
-  xlab("Age") + ylab("Length") + ggtitle("Points removed from model") 
+removed_plot <- ggplot(data=plot_pts, aes(x=age,y=length)) + geom_point(aes(color=removed, shape=removed)) + scale_shape_manual(values=c(16, 3)) + xlab("Age") + ylab("Length") + ggtitle("Points removed from model") 
+
+# Plot proportions with confidence intervals
+plotCI <- function(data.in, ylab, title){
+  ggplot(data = data.in, aes(x = Age, y = Estimate, fill = Model, color = Model), size = 3) +
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+        panel.background = element_blank(), axis.line = element_line(colour = "black"),
+        legend.title = element_blank(), legend.key = element_rect(fill = "white")) +
+  geom_errorbar(aes(ymin = Lower, ymax = Upper), width = 0.1,position=position_dodge(width=0.7)) +
+  geom_point(position=position_dodge(width=0.7)) +
+  geom_text(aes(label=format(round(Estimate,1),nsmall=1)),hjust=-0.2, size=3,show.legend = FALSE,position=position_dodge(width=0.7)) +
+  scale_color_manual(values = c("#E7B800", "#2E9FDF")) + 
+  scale_x_discrete(breaks = data.in$Age, labels = data.in$Age) +
+  scale_y_continuous(limits = c(0,80), name = ylab) + ggtitle(title)
+}
+
+# Plot prevalence
+prev_plot <- plotCI(prev_dat, ylab="Prevalence with 95% CI", title="Estimated prevalence of stunting")
+
+# Plot sequential incidence
+inc_plot <- plotCI(inc_dat, ylab="Incidence with 95% CI", title="Estimated incidence of stunting (Sequential)")
+
+# Plot CB incidence
+inc_plot.cb <- plotCI(inc_dat.cb, ylab="Incidence with 95% CI", title="Estimated incidence of stunting (Common baseline)")
+
+# Plot sequential reversal
+rev_plot <- plotCI(rev_dat, ylab="Reversal with 95% CI", title="Estimated incidence of reversal (Sequential)")
+
+# Plot CB reversal
+rev_plot.cb <- plotCI(rev_dat.cb, ylab="Reversal with 95% CI", title="Estimated incidence of reversal (Common baseline)")
+```
+
+# Data cleaning
+For data cleaning two main steps were taken, leaving 10835 of the 19078 original observations:
+
+1. First, invalid age and missing length observations were removed from the dataset. 
+2. Second, facility visits after birth were removed from the dataset. 
+
+Ages were categorized into 7 categories: 
+
+* Birth (Days 0 to 3)
+* Day 6 (Days 4 to 10)
+* Day 28 (Days 20 to 35)
+* Day 42 (Days 35 to 50)
+* 6 months (Days 165 to 200)
+* 12 months (Days 350 to 380)
+* 24 months (Days 715 to 765)
+
+# Modeling
+Six mixed effects models were fit for the outcome of length. A combination of standardized age, quadratic age, and age splines were used as fixed and random effects.
+
+```{r, eval=F}
+# LME with random intercept
+mod1 <- lmer(length ~ age_s + (1|cuuid), data=dat) 
+
+# LME with random intercept+slope
+mod2 <- lmer(length ~ age_s + (1+age_s|cuuid), data=dat) 
+
+# LME with random intercept and quadratic age
+mod3 <- lmer(length ~ age_s + I(age_s^2) + (1|cuuid), data=dat)
+
+# LME with random intercept+slope and quadratic age
+mod4 <- lmer(length ~ age_s + I(age_s^2) + (1 + age_s|cuuid), data=dat)
+
+# LME with random intercept and piecewise-linear age
+mod5 <- lmer(length ~ spline1 + spline2 + spline3 + spline4 + (1|cuuid), data=dat)
+
+# LME with random intercept+slope and piecewise-linear age
+mod6 <- lmer(length ~ spline1 + spline2 + spline3 + spline4 + (1 + age_s|cuuid), data=dat)
+```
+
+Out of these 6 models, we chose to use \textcolor{red}{model 6} which utilizes age splines for the fixed effects, and a random intercept and slope for age. We chose this model due to how the data was collected, as well as some model diagnostics (AIC, BIC, and deviance). Note that lower values indicate better fit:
+
+```{r}
+AIC(mod1,mod2,mod3,mod4,mod5,mod6)
+BIC(mod1,mod2,mod3,mod4,mod5,mod6)
+sapply(c(mod1,mod2,mod3,mod4,mod5,mod6),deviance)
+```
+
+# Measurement error
+It was clear that measurement error was an issue in our dataset. To account for this, we attempted three correction techniques:
+
+1. Removing observed lengths that were 1.5 standard deviations away from our predicted model lengths
+2. Removing observations that did not increase monotonically (lengths should always increase over time)
+3. For time windows with multiple observations, the average length was taken
+
+Ultimately, we chose to utilize methods (1) and (3) for our calculations.
+
+\newpage
+# Visualizing windows and removed points
+To visualize the windows of our age categories:
+
+```{r}
+window_plot
+```
+
+\newpage
+In order to determine which points to remove from our dataset, we compared the model's predicted points with the observed dataset:
+
+```{r}
+predicted_plot
+```
+
+\newpage
+We removed observed points that were 1.5 standard deviations away from our predicted points:
+
+```{r}
+removed_plot
+```
+
+When using our model to remove points from our dataset, we ended up with the following counts in each window:
+
+```{r}
+removedPoints
+```
+
+\newpage
+# Prevalence, incidence, and reversal
+After removing the relevant points in our dataset, we used the remaining data points to calculate our estimates of prevalence, incidence, and reversal of stunting.
+
+## Prevalence:
+
+```{r}
+prev_dat # Get prevalence
+```
+
+
+## Incidence and reversal:
+Incidence and reversal was calculated using only 4 categories: Day 6, 6 months, 12 months, and 24 months.
+Furthermore, incidence and reversal was calculated in two ways.
+
+1. Sequential - (Day 6 vs 6 months, 6 months vs 12 months, 12 months vs 24 months)
+2. Common baseline - Day 6 (Day 6 vs 6 months, Day 6 vs 12 months, Day 6 vs 24 months)
+
+```{r}
+inc_dat # Get sequential incidence
+rev_dat # Get sequential reversal
+inc_dat.cb # Get incidence w/ common baseline
+rev_dat.cb # Get reversal w/ common baseline
+```
+
+## Incidence and reversal counts:
+Depending on the baseline value, the number of people in the "risk set" changes:
+
+```{r}
+inc_c # Get sequential incidence counts 
+rev_c # Get sequential reversal counts
+inc_c.cb # Get incidence counts w/ common baseline
+rev_c.cb # Get reversal counts w/ common baseline
+```
+
+# Plotting incidence and reversal
+
+```{r, echo=FALSE, fig.width=9}
+prev_plot # Prevalence plot
+inc_plot # Sequential incidence plot
+rev_plot # Sequential reversal plot 
+inc_plot.cb # Incidence plot with common baseline
+rev_plot.cb # Reversal plot with common baseline
+```
+
+
+
+
+
+
+
 
